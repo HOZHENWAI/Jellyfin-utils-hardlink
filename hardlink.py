@@ -3,6 +3,8 @@ import argparse
 import logging
 import traceback
 from typing import Union, List, Optional
+import re
+from string import punctuation
 
 from tqdm import tqdm
 from pathlib import Path
@@ -107,8 +109,8 @@ def link_subfolders_alternative(source:Path, destination:Path, extensions:Union[
 def link_collection_folders(source:Path, destination:Path, extensions:Optional[List]=None)->None:
     for obj in os.scandir(source):
         if not os.path.isdir(obj):
-            prefix = " ".join(source.parts[-1].split()[:2])  # keep a prefix for the origin folder
-            new_link = name_resolve(f=Path(obj), source=source, destination=destination, prefix=prefix)
+            # prefix = " ".join(source.parts[-1].split()[:2])  # keep a prefix for the origin folder
+            new_link = name_resolve(f=Path(obj), source=source, method=NameMethod.collection, destination=destination)
             if extensions is None:
                 if not os.path.exists(new_link.parent):
                     try:
@@ -122,6 +124,7 @@ def link_collection_folders(source:Path, destination:Path, extensions:Optional[L
                     pass
 
             elif new_link.suffix in extensions:
+                logger.info(obj)
                 if not os.path.exists(new_link.parent):
                     try:
                         os.mkdir(new_link.parent)
@@ -153,9 +156,13 @@ def name_resolve(f:Path,source:Path, destination:Path, method=NameMethod.tree, p
     elif method == NameMethod.collection:
         f_parts = list(f.parts)
         source_parts = source.parts
+        new_folder_name = re.search("^(.+?)[\d\(]", f_parts[-1])
         if prefix is not None:
             f_parts[-1] = prefix + " - " + f_parts[-1]
-        resolved_path = Path(destination, *f_parts[len(source_parts):])
+        if new_folder_name is None:
+            resolved_path = Path(destination, *f_parts[len(source_parts):])
+        else:
+            resolved_path = Path(destination, *f_parts[len(source_parts):-1], new_folder_name.group(1).rstrip(punctuation), f_parts[-1])
     else:
         raise NotImplementedError
 
@@ -174,6 +181,50 @@ def link_movies(source:Path, destination:Path)->None:
         print(traceback.format_exc())
         pass
 
+def link_root(source:Path, destination:Path, extensions:Optional[List]=None)->None:
+    try:
+        for f in os.scandir(source):
+            if not f.is_dir():
+                if extensions is None:
+                    new_folder = re.search("^(.+?)[\d\(]", Path(f).parts[-1])
+                    if new_folder is None:
+                        new_folder = Path(f).stem
+                    else:
+                        new_folder= new_folder.group(1).rstrip(punctuation+" ")
+
+                    new_link = destination.joinpath(new_folder).joinpath(Path(f).parts[-1])
+                    try:
+                        logger.info(destination.joinpath(new_folder))
+                        os.mkdir(destination.joinpath(new_folder))
+                    except FileExistsError:
+                        pass
+
+                    try:
+                        os.link(src=Path(f), dst=new_link)
+                    except FileExistsError:
+                        pass
+                else:
+                    if Path(f).suffix in extensions:
+                        new_folder = re.search("^(.+?)[\d\(]", Path(f).parts[-1])
+                        if new_folder is None:
+                            new_folder = Path(f).stem
+                        else:
+                            new_folder = new_folder.group(1).rstrip(punctuation+" ")
+
+                        new_link = destination.joinpath(new_folder).joinpath(Path(f).parts[-1])
+                        try:
+                            logger.info(destination.joinpath(new_folder))
+                            os.mkdir(str(destination.joinpath(new_folder)))
+                        except FileExistsError:
+                            pass
+
+                        try:
+                            os.link(src=Path(f), dst=new_link)
+                        except FileExistsError:
+                            pass
+    except Exception as e:
+        print(traceback.format_exc())
+        pass
 
 
 def link_series(source:Path, destination:Path, extensions:Optional[List]=None)->None:
@@ -184,7 +235,8 @@ def link_series(source:Path, destination:Path, extensions:Optional[List]=None)->
     :return:
     """
     try:
-        for f in tqdm(os.scandir(source)):
+        link_root(source, destination, extensions)
+        for f in os.scandir(source):
             if f.is_dir():
                 contents = list(Path(f).glob("*"))
                 episode_true = any([content.suffix in extensions for content in contents])
@@ -194,7 +246,6 @@ def link_series(source:Path, destination:Path, extensions:Optional[List]=None)->
                     else:
                         link_collection_folders(Path(f), destination, extensions)
                 else: #case 2: there is no episode in the folder, then walk the other folder
-                    logger.info(f)
                     link_series(Path(f), destination, extensions)
     except Exception as e:
         print(traceback.format_exc())
